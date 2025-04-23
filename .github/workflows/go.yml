@@ -22,10 +22,10 @@ jobs:
         go-version-file: 'go.mod'
 
     - name: Build interceptor
-      run: go build -v -o bin/interceptor interceptor
+      run: go build -v -o bin/interceptor ./interceptor
 
     - name: Build executor
-      run: go build -v -o bin/executor executor
+      run: go build -v -o bin/executor ./executor
 
     - name: Test
       run: go test -v ./...
