@@ -29,8 +29,11 @@ func main() {
 	}
 
 	binaryName := flag.Arg(0)
-	buildTags := strings.Split(*tags, ",")
-	slices.Sort(buildTags)
+	var buildTags []string
+	if *tags != "" {
+		buildTags = strings.Split(*tags, ",")
+		slices.Sort(buildTags)
+	}
 	buildTagsJSON, err := json.Marshal(buildTags)
 	if err != nil {
 		log.Fatalf("unable to marshal build tags: %v", err)
