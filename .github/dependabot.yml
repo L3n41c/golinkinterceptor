@@ -14,6 +14,6 @@ updates:
     schedule:
       interval: daily
   - package-ecosystem: gomod
-    directory: /tests
+    directory: /test
     schedule:
       interval: daily
