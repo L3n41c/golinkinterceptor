@@ -3,29 +3,31 @@
 
 name: Go
 
+permissions:
+  contents: read
+
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version-file: 'go.mod'
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: "go.mod"
 
-    - name: Build interceptor
-      run: go build -v -o bin/interceptor ./interceptor
+      - name: Build interceptor
+        run: go build -v -o bin/interceptor ./interceptor
 
-    - name: Build executor
-      run: go build -v -o bin/executor ./executor
+      - name: Build executor
+        run: go build -v -o bin/executor ./executor
 
-    - name: Test
-      run: go test -v ./...
+      - name: Test
+        run: go test -v ./...
