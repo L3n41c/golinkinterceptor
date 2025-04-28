@@ -18,6 +18,7 @@ import (
 
 const dbPath = "link.db"
 
+//nolint:gocyclo
 func main() {
 	link := flag.String("link", "", "File path to the linker executable (Should be \"$(go env GOTOOLDIR)/link\")")
 	tags := flag.String("tags", "", "Build tags to use")
@@ -50,9 +51,9 @@ func main() {
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		log.Fatalf("unable to begin transaction: %v", err)
+		log.Fatalf("unable to begin transaction: %v", err) //nolint:gocritic
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck
 
 	// Get the link command ID
 	row := tx.QueryRowContext(ctx, `
@@ -65,9 +66,8 @@ WHERE binary_name = ? AND tags = jsonb(?);`,
 		if err == sql.ErrNoRows {
 			fmt.Fprintf(os.Stderr, "No link command found for %q with build tags %q\n", binaryName, buildTags)
 			os.Exit(1)
-		} else {
-			log.Fatalf("unable to query link command ID: %v", err)
 		}
+		log.Fatalf("unable to query link command ID: %v", err)
 	}
 
 	// Get the importcfg
@@ -147,7 +147,7 @@ ORDER BY pos;`,
 	}
 
 	log.Printf("Link command: %s %s\n", *link, strings.Join(args, " "))
-	out, err := exec.CommandContext(ctx, *link, args...).Output()
+	out, err := exec.CommandContext(ctx, *link, args...).Output() //nolint:gosec
 	log.Print(string(out))
 	if err != nil {
 		if err, ok := err.(*exec.ExitError); ok {
@@ -162,7 +162,7 @@ ORDER BY pos;`,
 	}
 
 	log.Printf("Exec: %s %s\n", binaryFile.Name(), flag.Args()[1:])
-	if err := syscall.Exec(binaryFile.Name(), flag.Args()[1:], os.Environ()); err != nil {
+	if err := syscall.Exec(binaryFile.Name(), flag.Args()[1:], os.Environ()); err != nil { //nolint:gosec
 		log.Fatalf("exec failed: %v", err)
 	}
 }
