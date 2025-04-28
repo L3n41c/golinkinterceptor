@@ -19,6 +19,7 @@ import (
 
 const dbPath = "link.db"
 
+//nolint:gocyclo
 func main() {
 	if len(os.Args) < 3 || os.Args[1] != "go" || os.Args[2] != "build" {
 		fmt.Printf("Usage: %s go build -o output [build flags] [packages]", os.Args[0])
@@ -57,7 +58,7 @@ func main() {
 	}
 
 	// Build the program once to compile all packages in the cache
-	out, err = exec.CommandContext(ctx, os.Args[1], os.Args[2:]...).CombinedOutput()
+	out, err = exec.CommandContext(ctx, os.Args[1], os.Args[2:]...).CombinedOutput() //nolint:gosec
 	fmt.Println(string(out))
 	if err != nil {
 		if err, ok := err.(*exec.ExitError); ok {
@@ -74,7 +75,7 @@ func main() {
 
 	args := []string{os.Args[2], "-x"}
 	args = append(args, os.Args[3:]...)
-	out, err = exec.CommandContext(ctx, os.Args[1], args...).CombinedOutput()
+	out, err = exec.CommandContext(ctx, os.Args[1], args...).CombinedOutput() //nolint:gosec
 	if err != nil {
 		log.Fatalf("Error: unable to get link command: %v\n%s", err, out)
 	}
@@ -92,7 +93,7 @@ func main() {
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		log.Fatalf("Error: unable to begin transaction: %v", err)
+		log.Fatalf("Error: unable to begin transaction: %v", err) //nolint:gocritic
 	}
 	defer func() {
 		if err := tx.Commit(); err != nil {
@@ -148,24 +149,24 @@ func main() {
 		}
 	}
 
-	buildTagsId, err := InsertBuildTags(ctx, tx, buildTags)
+	buildTagsID, err := InsertBuildTags(ctx, tx, buildTags)
 	if err != nil {
 		log.Fatalf("Error: unable to insert build tags into database: %v", err)
 	}
 
 	for _, linkCommand := range linkCommands {
-		linkCommandId, importcfg, err := InsertLinkCommand(ctx, tx, output, buildTagsId, linkCommand)
+		linkCommandID, importcfg, err := InsertLinkCommand(ctx, tx, output, buildTagsID, linkCommand)
 		if err != nil {
 			log.Fatalf("Error: unable to insert link command into database: %v", err)
 		}
 
 		for _, line := range filesContent[importcfg] {
 			if strings.HasPrefix(line, "packagefile") {
-				if err := InsertPackageFile(ctx, tx, linkCommandId, line); err != nil {
+				if err := InsertPackageFile(ctx, tx, linkCommandID, line); err != nil {
 					log.Fatalf("Error: unable to insert package file into database: %v", err)
 				}
 			} else {
-				if err := InsertAdditionalLines(ctx, tx, linkCommandId, line); err != nil {
+				if err := InsertAdditionalLines(ctx, tx, linkCommandID, line); err != nil {
 					log.Fatalf("Error: unable to insert additional lines into database: %v", err)
 				}
 			}
@@ -245,35 +246,35 @@ func InsertBuildTags(ctx context.Context, tx *sql.Tx, buildTags []string) (int64
 	}
 
 	if rowsAffected, err := result.RowsAffected(); err == nil && rowsAffected == 1 {
-		if lastInsertId, err := result.LastInsertId(); err == nil {
-			return lastInsertId, nil
+		if lastInsertID, err := result.LastInsertId(); err == nil {
+			return lastInsertID, nil
 		}
 	}
 
 	row := tx.QueryRowContext(ctx, `SELECT build_tags_id FROM build_tags WHERE tags = jsonb(?);`, buildTagsJSON)
-	var buildTagsId int64
-	if err := row.Scan(&buildTagsId); err != nil {
+	var buildTagsID int64
+	if err := row.Scan(&buildTagsID); err != nil {
 		return 0, fmt.Errorf("unable to get build tags ID: %w", err)
 	}
 
-	return buildTagsId, nil
+	return buildTagsID, nil
 }
 
-func InsertLinkCommand(ctx context.Context, tx *sql.Tx, binaryName string, buildTagsId int64, linkCommand string) (int64, string, error) {
+func InsertLinkCommand(ctx context.Context, tx *sql.Tx, binaryName string, buildTagsID int64, linkCommand string) (int64, string, error) {
 
-	result, err := tx.ExecContext(ctx, `INSERT INTO link_command (binary_name, build_tags_id) VALUES (?, ?);`, binaryName, buildTagsId)
+	result, err := tx.ExecContext(ctx, `INSERT INTO link_command (binary_name, build_tags_id) VALUES (?, ?);`, binaryName, buildTagsID)
 	if err != nil {
 		return 0, "", fmt.Errorf("unable to insert link command: %w", err)
 	}
 
-	var linkCommandId int64
+	var linkCommandID int64
 	if rowsAffected, err := result.RowsAffected(); err == nil && rowsAffected == 1 {
-		if lastInsertId, err := result.LastInsertId(); err == nil {
-			linkCommandId = lastInsertId
+		if lastInsertID, err := result.LastInsertId(); err == nil {
+			linkCommandID = lastInsertID
 		}
 	} else {
-		row := tx.QueryRowContext(ctx, `SELECT link_command_id FROM link_command WHERE binary_name = ? AND build_tags_id = ?;`, binaryName, buildTagsId)
-		if err := row.Scan(&linkCommandId); err != nil {
+		row := tx.QueryRowContext(ctx, `SELECT link_command_id FROM link_command WHERE binary_name = ? AND build_tags_id = ?;`, binaryName, buildTagsID)
+		if err := row.Scan(&linkCommandID); err != nil {
 			return 0, "", fmt.Errorf("unable to get link command ID: %w", err)
 		}
 	}
@@ -291,16 +292,16 @@ func InsertLinkCommand(ctx context.Context, tx *sql.Tx, binaryName string, build
 			arg = "PLACEHOLDER"
 		}
 
-		if _, err := tx.ExecContext(ctx, `INSERT INTO link_command_args (link_command_id, pos, arg) VALUES (?, ?, ?);`, linkCommandId, i, arg); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO link_command_args (link_command_id, pos, arg) VALUES (?, ?, ?);`, linkCommandID, i, arg); err != nil {
 			return 0, "", fmt.Errorf("unable to insert link command argument: %w", err)
 		}
 		prevArg = arg
 	}
 
-	return linkCommandId, importcfg, nil
+	return linkCommandID, importcfg, nil
 }
 
-func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandId int64, line string) error {
+func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandID int64, line string) error {
 	directive, argument, ok := strings.Cut(line, " ")
 	if !ok || directive != "packagefile" {
 		return fmt.Errorf("invalid line: %s", line)
@@ -316,19 +317,19 @@ func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandId int64, lin
 		return fmt.Errorf("unable to insert package file: %w", err)
 	}
 
-	var packageFileId int64
+	var packageFileID int64
 	if rowsAffected, err := result.RowsAffected(); err == nil && rowsAffected == 1 {
-		if lastInsertId, err := result.LastInsertId(); err == nil {
-			packageFileId = lastInsertId
+		if lastInsertID, err := result.LastInsertId(); err == nil {
+			packageFileID = lastInsertID
 		}
 	} else {
 		row := tx.QueryRowContext(ctx, `SELECT package_file_id FROM package_file WHERE package = ? AND file = ?;`, packageName, file)
-		if err := row.Scan(&packageFileId); err != nil {
+		if err := row.Scan(&packageFileID); err != nil {
 			return fmt.Errorf("unable to get package file ID: %w", err)
 		}
 	}
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO link_command_package_file (link_command_id, package_file_id) VALUES (?, ?);`, linkCommandId, packageFileId)
+	_, err = tx.ExecContext(ctx, `INSERT INTO link_command_package_file (link_command_id, package_file_id) VALUES (?, ?);`, linkCommandID, packageFileID)
 	if err != nil {
 		return fmt.Errorf("unable to insert link command package file: %w", err)
 	}
@@ -336,8 +337,8 @@ func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandId int64, lin
 	return nil
 }
 
-func InsertAdditionalLines(ctx context.Context, tx *sql.Tx, linkCommandId int64, line string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO importcfg_additional_lines (link_command_id, line) VALUES (?, ?);`, linkCommandId, line)
+func InsertAdditionalLines(ctx context.Context, tx *sql.Tx, linkCommandID int64, line string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO importcfg_additional_lines (link_command_id, line) VALUES (?, ?);`, linkCommandID, line)
 	if err != nil {
 		return fmt.Errorf("unable to insert additional lines: %w", err)
 	}
