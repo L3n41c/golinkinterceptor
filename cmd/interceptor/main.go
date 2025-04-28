@@ -171,6 +171,11 @@ func main() {
 				}
 			}
 		}
+
+		err = UpdateLinkCommand(ctx, tx, linkCommandID)
+		if err != nil {
+			log.Fatalf("Error: unable to update link command in database: %v", err)
+		}
 	}
 }
 
@@ -185,9 +190,11 @@ func OpenOrCreateDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 CREATE TABLE IF NOT EXISTS link_command (
 	link_command_id INTEGER PRIMARY KEY AUTOINCREMENT,
 	binary_name     TEXT    NOT NULL,
-	build_tags_id   INTEGER,
+	build_tags_id   INTEGER NOT NULL,
+	main_package_id INTEGER,
 	UNIQUE (binary_name, build_tags_id),
-	FOREIGN KEY (build_tags_id) REFERENCES build_tags(build_tags_id)
+	FOREIGN KEY (build_tags_id) REFERENCES build_tags(build_tags_id),
+	FOREIGN KEY (main_package_id) REFERENCES package_file(package_file_id)
 );`,
 		`
 CREATE TABLE IF NOT EXISTS link_command_args (
@@ -332,6 +339,47 @@ func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandID int64, lin
 	_, err = tx.ExecContext(ctx, `INSERT INTO link_command_package_file (link_command_id, package_file_id) VALUES (?, ?);`, linkCommandID, packageFileID)
 	if err != nil {
 		return fmt.Errorf("unable to insert link command package file: %w", err)
+	}
+
+	return nil
+}
+
+func UpdateLinkCommand(ctx context.Context, tx *sql.Tx, linkCommandID int64) error {
+	_, err := tx.ExecContext(ctx, `
+UPDATE link_command
+SET main_package_id = (
+	SELECT package_file_id
+	FROM package_file
+	WHERE file = (
+		SELECT arg
+		FROM link_command_args
+		WHERE link_command_id = ?
+		ORDER BY pos DESC
+		LIMIT 1
+	)
+)
+WHERE link_command_id = ?;
+`, linkCommandID, linkCommandID)
+	if err != nil {
+		return fmt.Errorf("unable to update link command: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+UPDATE link_command_args
+SET arg = "MAIN PACKAGE"
+WHERE link_command_id = ?
+	AND arg = (
+		SELECT file
+		FROM package_file
+		WHERE package_file_id = (
+			SELECT main_package_id
+			FROM link_command
+			WHERE link_command_id = ?
+		)
+	);
+`, linkCommandID, linkCommandID)
+	if err != nil {
+		return fmt.Errorf("unable to update link command args: %w", err)
 	}
 
 	return nil
