@@ -57,12 +57,15 @@ func main() {
 
 	// Get the link command ID
 	row := tx.QueryRowContext(ctx, `
-SELECT link_command_id
-FROM link_command NATURAL JOIN build_tags
+SELECT link_command_id, package_file.file
+FROM link_command
+NATURAL JOIN build_tags
+LEFT JOIN package_file ON link_command.main_package_id = package_file.package_file_id
 WHERE binary_name = ? AND tags = jsonb(?);`,
 		binaryName, buildTagsJSON)
 	var linkCommandID int
-	if err := row.Scan(&linkCommandID); err != nil {
+	var mainPackage string
+	if err := row.Scan(&linkCommandID, &mainPackage); err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Fprintf(os.Stderr, "No link command found for %q with build tags %q\n", binaryName, buildTags)
 			os.Exit(1)
@@ -73,7 +76,8 @@ WHERE binary_name = ? AND tags = jsonb(?);`,
 	// Get the importcfg
 	rows, err := tx.QueryContext(ctx, `
 SELECT 'packagefile ' || package || '=' || file
-FROM package_file NATURAL JOIN link_command_package_file
+FROM package_file
+NATURAL JOIN link_command_package_file
 WHERE link_command_id = ?
 UNION
 SELECT line
@@ -112,6 +116,7 @@ WHERE link_command_id = ?;`,
 		log.Fatalf("unable to create binary file: %v", err)
 	}
 
+	// Get the link command arguments
 	rows, err = tx.QueryContext(ctx, `
 SELECT arg
 FROM link_command_args
@@ -139,6 +144,10 @@ ORDER BY pos;`,
 			}
 		}
 
+		if arg == "MAIN PACKAGE" {
+			arg = mainPackage
+		}
+
 		args = append(args, arg)
 		prevArg = arg
 	}
@@ -146,6 +155,7 @@ ORDER BY pos;`,
 		log.Fatalf("error reading link command rows: %v", err)
 	}
 
+	// Invoke the linker
 	log.Printf("Link command: %s %s\n", *link, strings.Join(args, " "))
 	out, err := exec.CommandContext(ctx, *link, args...).Output() //nolint:gosec
 	log.Print(string(out))
