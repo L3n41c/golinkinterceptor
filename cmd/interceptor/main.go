@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -19,46 +20,16 @@ import (
 
 const dbPath = "link.db"
 
-//nolint:gocyclo
 func main() {
-	if len(os.Args) < 3 || os.Args[1] != "go" || os.Args[2] != "build" {
-		fmt.Printf("Usage: %s go build -o output [build flags] [packages]", os.Args[0])
-		os.Exit(1)
-	}
-
-	var output string
-	var buildTags []string
-	for i, arg := range os.Args[:len(os.Args)-1] {
-		switch arg {
-		case "-o":
-			output = os.Args[i+1]
-		case "-tags", "--tags":
-			buildTags = strings.Split(os.Args[i+1], ",")
-		}
-	}
-	if output == "" {
-		log.Fatalln("Error: -o flag is required")
-	}
-
 	ctx := context.Background()
 
-	// Get Go environment variables
-	out, err := exec.CommandContext(ctx, "go", "env", "-json").Output()
+	config, err := parseConfig(ctx)
 	if err != nil {
-		if err, ok := err.(*exec.ExitError); ok {
-			os.Stderr.Write(err.Stderr)
-			os.Exit(err.ExitCode())
-		}
-		log.Fatalf("Error: unable to get Go environment: %v", err)
-	}
-	var goEnv map[string]string
-	err = json.Unmarshal(out, &goEnv)
-	if err != nil {
-		log.Fatalf("Error: unable to parse Go environment: %v", err)
+		log.Fatalf("Error: unable to parse config: %v", err)
 	}
 
 	// Build the program once to compile all packages in the cache
-	out, err = exec.CommandContext(ctx, os.Args[1], os.Args[2:]...).CombinedOutput() //nolint:gosec
+	out, err := exec.CommandContext(ctx, os.Args[1], os.Args[2:]...).CombinedOutput() //nolint:gosec
 	fmt.Println(string(out))
 	if err != nil {
 		if err, ok := err.(*exec.ExitError); ok {
@@ -68,9 +39,9 @@ func main() {
 	}
 
 	// Re-build the program to get the link command
-	err = os.Remove(output)
+	err = os.Remove(config.binaryName)
 	if err != nil {
-		log.Fatalf("Error: unable to remove output file %s: %v", output, err)
+		log.Fatalf("Error: unable to remove output file %s: %v", config.binaryName, err)
 	}
 
 	args := []string{os.Args[2], "-x"}
@@ -80,28 +51,65 @@ func main() {
 		log.Fatalf("Error: unable to get link command: %v\n%s", err, out)
 	}
 
-	// Create the database
-	db, err := OpenOrCreateDB(ctx, dbPath)
-	if err != nil {
-		log.Fatalf("Error: unable to open or create database: %v", err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Fatalf("Error: unable to close database: %v", err)
-		}
-	}()
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		log.Fatalf("Error: unable to begin transaction: %v", err) //nolint:gocritic
-	}
-	defer func() {
-		if err := tx.Commit(); err != nil {
-			log.Fatalf("Error: unable to commit transaction: %v", err)
-		}
-	}()
-
 	// Extract the link command from the `go build -x` output
+	linkCommands, filesContent, err := parseGoBuildOutput(ctx, out)
+	if err != nil {
+		log.Fatalf("Error: unable to parse Go build output: %v", err)
+	}
+
+	err = writeToDB(ctx, config, linkCommands, filesContent)
+	if err != nil {
+		log.Fatalf("Error: unable to write to database: %v", err)
+	}
+}
+
+type Config struct {
+	binaryName string
+	buildTags  []string
+}
+
+func parseConfig(_ context.Context) (config Config, err error) {
+	if len(os.Args) < 3 || os.Args[1] != "go" || os.Args[2] != "build" {
+		fmt.Printf("Usage: %s go build -o output [build flags] [packages]", os.Args[0])
+		os.Exit(1)
+	}
+
+	for i, arg := range os.Args[:len(os.Args)-1] {
+		switch arg {
+		case "-o":
+			config.binaryName = os.Args[i+1]
+		case "-tags", "--tags":
+			config.buildTags = strings.Split(os.Args[i+1], ",")
+			slices.Sort(config.buildTags)
+		}
+	}
+	if config.binaryName == "" {
+		return Config{}, errors.New("Error: -o flag is required")
+	}
+
+	return
+}
+
+func getGoEnvVar(ctx context.Context) (goEnv map[string]string, err error) {
+	out, err := exec.CommandContext(ctx, "go", "env", "-json").Output()
+	if err != nil {
+		if err, ok := err.(*exec.ExitError); ok {
+			os.Stderr.Write(err.Stderr)
+			os.Exit(err.ExitCode())
+		}
+		return nil, fmt.Errorf("unable to get Go environment: %w", err)
+	}
+
+	err = json.Unmarshal(out, &goEnv)
+
+	return
+}
+
+func parseGoBuildOutput(ctx context.Context, out []byte) (linkCommands []string, filesContent map[string][]string, err error) {
+	goEnv, err := getGoEnvVar(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("unable to get Go environment variables: %w", err)
+	}
 
 	envVarDefRe := regexp.MustCompile(`^(\w+)=(\S*)$`)
 	envVarRe := regexp.MustCompile(`\$\w+`)
@@ -109,8 +117,8 @@ func main() {
 	endFileRe := regexp.MustCompile(`^EOF$`)
 	linkCommandRe := regexp.MustCompile(`^.*` + regexp.QuoteMeta(goEnv["GOTOOLDIR"]+"/link") + ` (.*)$`)
 
-	filesContent := make(map[string][]string)
-	linkCommands := make([]string, 0, 1)
+	filesContent = make(map[string][]string)
+	linkCommands = make([]string, 0, 1)
 
 	currentFile := ""
 	envVarMap := make(map[string]string)
@@ -149,37 +157,63 @@ func main() {
 		}
 	}
 
-	buildTagsID, err := InsertBuildTags(ctx, tx, buildTags)
+	return
+}
+
+func writeToDB(ctx context.Context, config Config, linkCommands []string, filesContent map[string][]string) (err error) {
+	db, err := openOrCreateDB(ctx, dbPath)
 	if err != nil {
-		log.Fatalf("Error: unable to insert build tags into database: %v", err)
+		return fmt.Errorf("unable to open or create database: %w", err)
+	}
+	defer func() {
+		if err2 := db.Close(); err2 != nil {
+			err = errors.Join(err, fmt.Errorf("unable to close database: %w", err2))
+		}
+	}()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("unable to begin transaction: %w", err)
+	}
+	defer func() {
+		if err2 := tx.Commit(); err2 != nil {
+			err = errors.Join(err, fmt.Errorf("unable to commit transaction: %w", err2))
+		}
+	}()
+
+	buildTagsID, err := insertBuildTags(ctx, tx, config.buildTags)
+	if err != nil {
+		return fmt.Errorf("unable to insert build tags into database: %w", err)
 	}
 
 	for _, linkCommand := range linkCommands {
-		linkCommandID, importcfg, err := InsertLinkCommand(ctx, tx, output, buildTagsID, linkCommand)
+		linkCommandID, importcfg, err := insertLinkCommand(ctx, tx, config.binaryName, buildTagsID, linkCommand)
 		if err != nil {
-			log.Fatalf("Error: unable to insert link command into database: %v", err)
+			return fmt.Errorf("unable to insert link command into database: %w", err)
 		}
 
 		for _, line := range filesContent[importcfg] {
 			if strings.HasPrefix(line, "packagefile") {
-				if err := InsertPackageFile(ctx, tx, linkCommandID, line); err != nil {
-					log.Fatalf("Error: unable to insert package file into database: %v", err)
+				if err := insertPackageFile(ctx, tx, linkCommandID, line); err != nil {
+					return fmt.Errorf("unable to insert package file into database: %w", err)
 				}
 			} else {
-				if err := InsertAdditionalLines(ctx, tx, linkCommandID, line); err != nil {
-					log.Fatalf("Error: unable to insert additional lines into database: %v", err)
+				if err := insertAdditionalLines(ctx, tx, linkCommandID, line); err != nil {
+					return fmt.Errorf("unable to insert additional lines into database: %w", err)
 				}
 			}
 		}
 
-		err = UpdateLinkCommand(ctx, tx, linkCommandID)
+		err = updateLinkCommand(ctx, tx, linkCommandID)
 		if err != nil {
-			log.Fatalf("Error: unable to update link command in database: %v", err)
+			return fmt.Errorf("unable to update link command in database: %w", err)
 		}
 	}
+
+	return nil
 }
 
-func OpenOrCreateDB(ctx context.Context, dbPath string) (*sql.DB, error) {
+func openOrCreateDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=rwc&_foreign_keys=true")
 	if err != nil {
 		return nil, fmt.Errorf("unable to open database %q: %w", dbPath, err)
@@ -240,8 +274,7 @@ CREATE TABLE IF NOT EXISTS importcfg_additional_lines (
 	return db, nil
 }
 
-func InsertBuildTags(ctx context.Context, tx *sql.Tx, buildTags []string) (int64, error) {
-	slices.Sort(buildTags)
+func insertBuildTags(ctx context.Context, tx *sql.Tx, buildTags []string) (int64, error) {
 	buildTagsJSON, err := json.Marshal(buildTags)
 	if err != nil {
 		return 0, fmt.Errorf("unable to marshal build tags: %w", err)
@@ -267,7 +300,7 @@ func InsertBuildTags(ctx context.Context, tx *sql.Tx, buildTags []string) (int64
 	return buildTagsID, nil
 }
 
-func InsertLinkCommand(ctx context.Context, tx *sql.Tx, binaryName string, buildTagsID int64, linkCommand string) (int64, string, error) {
+func insertLinkCommand(ctx context.Context, tx *sql.Tx, binaryName string, buildTagsID int64, linkCommand string) (int64, string, error) {
 
 	result, err := tx.ExecContext(ctx, `INSERT INTO link_command (binary_name, build_tags_id) VALUES (?, ?);`, binaryName, buildTagsID)
 	if err != nil {
@@ -308,7 +341,7 @@ func InsertLinkCommand(ctx context.Context, tx *sql.Tx, binaryName string, build
 	return linkCommandID, importcfg, nil
 }
 
-func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandID int64, line string) error {
+func insertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandID int64, line string) error {
 	directive, argument, ok := strings.Cut(line, " ")
 	if !ok || directive != "packagefile" {
 		return fmt.Errorf("invalid line: %s", line)
@@ -344,7 +377,7 @@ func InsertPackageFile(ctx context.Context, tx *sql.Tx, linkCommandID int64, lin
 	return nil
 }
 
-func UpdateLinkCommand(ctx context.Context, tx *sql.Tx, linkCommandID int64) error {
+func updateLinkCommand(ctx context.Context, tx *sql.Tx, linkCommandID int64) error {
 	_, err := tx.ExecContext(ctx, `
 UPDATE link_command
 SET main_package_id = (
@@ -385,7 +418,7 @@ WHERE link_command_id = ?
 	return nil
 }
 
-func InsertAdditionalLines(ctx context.Context, tx *sql.Tx, linkCommandID int64, line string) error {
+func insertAdditionalLines(ctx context.Context, tx *sql.Tx, linkCommandID int64, line string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO importcfg_additional_lines (link_command_id, line) VALUES (?, ?);`, linkCommandID, line)
 	if err != nil {
 		return fmt.Errorf("unable to insert additional lines: %w", err)
