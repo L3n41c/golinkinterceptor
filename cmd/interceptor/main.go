@@ -37,6 +37,22 @@ func main() {
 		log.Fatalf("Error: unable to build program: %v", err)
 	}
 
+	// Re-build the program to get everything in the cache
+	err = os.Remove(config.binaryName)
+	if err != nil {
+		log.Fatalf("Error: unable to remove output file %s: %v", config.binaryName, err)
+	}
+
+	// Re-build the program
+	out, err = exec.CommandContext(ctx, config.args[0], config.args[1:]...).CombinedOutput() //nolint:gosec
+	fmt.Println(string(out))
+	if err != nil {
+		if err, ok := err.(*exec.ExitError); ok {
+			os.Exit(err.ExitCode())
+		}
+		log.Fatalf("Error: unable to build program: %v", err)
+	}
+
 	// Re-build the program to get the link command
 	err = os.Remove(config.binaryName)
 	if err != nil {
