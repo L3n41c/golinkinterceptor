@@ -17,8 +17,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const dbPath = "link.db"
-
 func main() {
 	ctx := context.Background()
 
@@ -28,9 +26,9 @@ func main() {
 	}
 
 	// Open the database
-	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro&_foreign_keys=true")
+	db, err := sql.Open("sqlite3", "file:"+config.dbPath+"?mode=ro&_foreign_keys=true")
 	if err != nil {
-		log.Fatalf("Error: unable to open database %q: %v", dbPath, err)
+		log.Fatalf("Error: unable to open database %q: %v", config.dbPath, err)
 	}
 	defer db.Close()
 
@@ -83,6 +81,7 @@ func main() {
 }
 
 type Config struct {
+	dbPath     string
 	linker     string
 	binaryName string
 	buildTags  []string
@@ -90,6 +89,7 @@ type Config struct {
 }
 
 func parseConfig(_ context.Context) (config Config, err error) {
+	db := flag.String("db", "link.db", "Path to the sqlite DB")
 	link := flag.String("link", "", "File path to the linker executable (Should be \"$(go env GOTOOLDIR)/link\")")
 	tags := flag.String("tags", "", "Build tags to use")
 	flag.Parse()
@@ -99,6 +99,7 @@ func parseConfig(_ context.Context) (config Config, err error) {
 		os.Exit(2)
 	}
 
+	config.dbPath = *db
 	config.linker = *link
 	config.binaryName = flag.Arg(0)
 	config.args = flag.Args()[1:]
