@@ -90,19 +90,26 @@ func parseConfig(_ context.Context) (config Config, err error) {
 	return
 }
 
-func getGoEnvVar(ctx context.Context) (goEnv map[string]string, err error) {
-	out, err := exec.CommandContext(ctx, "go", "env", "-json").Output()
-	if err != nil {
-		if err, ok := err.(*exec.ExitError); ok {
-			os.Stderr.Write(err.Stderr)
-			os.Exit(err.ExitCode())
+var cachedGoEnvVar map[string]string
+
+func getGoEnvVar(ctx context.Context) (map[string]string, error) {
+	if cachedGoEnvVar == nil {
+		out, err := exec.CommandContext(ctx, "go", "env", "-json").Output()
+		if err != nil {
+			if err, ok := err.(*exec.ExitError); ok {
+				os.Stderr.Write(err.Stderr)
+				os.Exit(err.ExitCode())
+			}
+			return nil, fmt.Errorf("unable to get Go environment: %w", err)
 		}
-		return nil, fmt.Errorf("unable to get Go environment: %w", err)
+
+		err = json.Unmarshal(out, &cachedGoEnvVar)
+		if err != nil {
+			return nil, fmt.Errorf("unable to unmarshal Go environment: %w", err)
+		}
 	}
 
-	err = json.Unmarshal(out, &goEnv)
-
-	return
+	return cachedGoEnvVar, nil
 }
 
 func parseGoBuildOutput(ctx context.Context, out []byte) (linkCommands []string, filesContent map[string][]string, err error) {
