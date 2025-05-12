@@ -28,33 +28,34 @@ func main() {
 		log.Fatalf("Error: unable to parse config: %v", err)
 	}
 
-	// Build the program once to compile all packages in the cache
-	out, err := exec.CommandContext(ctx, os.Args[1], os.Args[2:]...).CombinedOutput() //nolint:gosec
-	fmt.Println(string(out))
-	if err != nil {
-		if err, ok := err.(*exec.ExitError); ok {
-			os.Exit(err.ExitCode())
+	var linkCommands []string
+	var filesContent map[string][]string
+	allFilesInCache := false
+	for !allFilesInCache {
+		// Force program rebuild
+		err = os.Remove(config.binaryName)
+		if err != nil && !os.IsNotExist(err) {
+			log.Fatalf("Error: unable to remove output file %s: %v", config.binaryName, err)
 		}
-		log.Fatalf("Error: unable to build program: %v", err)
-	}
 
-	// Re-build the program to get the link command
-	err = os.Remove(config.binaryName)
-	if err != nil {
-		log.Fatalf("Error: unable to remove output file %s: %v", config.binaryName, err)
-	}
+		// Build the program
+		args := []string{os.Args[2], "-x"}
+		args = append(args, os.Args[3:]...)
+		out, err := exec.CommandContext(ctx, os.Args[1], args...).CombinedOutput() //nolint:gosec
+		if err != nil {
+			log.Fatalf("Error: unable to get link command: %v\n%s", err, out)
+		}
 
-	args := []string{os.Args[2], "-x"}
-	args = append(args, os.Args[3:]...)
-	out, err = exec.CommandContext(ctx, os.Args[1], args...).CombinedOutput() //nolint:gosec
-	if err != nil {
-		log.Fatalf("Error: unable to get link command: %v\n%s", err, out)
-	}
+		// Extract the link command from the `go build -x` output
+		linkCommands, filesContent, err = parseGoBuildOutput(ctx, out)
+		if err != nil {
+			log.Fatalf("Error: unable to parse Go build output: %v", err)
+		}
 
-	// Extract the link command from the `go build -x` output
-	linkCommands, filesContent, err := parseGoBuildOutput(ctx, out)
-	if err != nil {
-		log.Fatalf("Error: unable to parse Go build output: %v", err)
+		allFilesInCache, err = areAllFilesInCache(ctx, filesContent)
+		if err != nil {
+			log.Fatalf("Error: unable to check if all files are in cache: %v", err)
+		}
 	}
 
 	err = writeToDB(ctx, config, linkCommands, filesContent)
@@ -158,6 +159,24 @@ func parseGoBuildOutput(ctx context.Context, out []byte) (linkCommands []string,
 	}
 
 	return
+}
+
+func areAllFilesInCache(ctx context.Context, filesContent map[string][]string) (bool, error) {
+	goEnv, err := getGoEnvVar(ctx)
+	if err != nil {
+		return false, fmt.Errorf("unable to get Go environment variables: %w", err)
+	}
+
+	for _, content := range filesContent {
+		for _, line := range content {
+			if strings.HasPrefix(line, "packagefile") &&
+				!strings.Contains(line, goEnv["GOCACHE"]) {
+				return false, nil
+			}
+		}
+	}
+
+	return true, nil
 }
 
 func writeToDB(ctx context.Context, config Config, linkCommands []string, filesContent map[string][]string) (err error) {
