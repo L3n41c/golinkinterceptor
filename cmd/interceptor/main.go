@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -17,8 +18,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
-
-const dbPath = "link.db"
 
 func main() {
 	ctx := context.Background()
@@ -38,9 +37,9 @@ func main() {
 		}
 
 		// Build the program
-		args := []string{os.Args[2], "-x"}
-		args = append(args, os.Args[3:]...)
-		out, err := exec.CommandContext(ctx, os.Args[1], args...).CombinedOutput() //nolint:gosec
+		args := []string{config.args[1], "-x"}
+		args = append(args, config.args[2:]...)
+		out, err := exec.CommandContext(ctx, config.args[0], args...).CombinedOutput() //nolint:gosec
 		if err != nil {
 			log.Fatalf("Error: unable to get link command: %v\n%s", err, out)
 		}
@@ -64,22 +63,30 @@ func main() {
 }
 
 type Config struct {
+	dbPath     string
+	args       []string
 	binaryName string
 	buildTags  []string
 }
 
 func parseConfig(_ context.Context) (config Config, err error) {
-	if len(os.Args) < 3 || os.Args[1] != "go" || os.Args[2] != "build" {
-		fmt.Printf("Usage: %s go build -o output [build flags] [packages]", os.Args[0])
-		os.Exit(1)
+	db := flag.String("db", "link.db", "Path to the sqlite DB")
+	flag.Parse()
+	if len(flag.Args()) < 2 || flag.Arg(0) != "go" || flag.Arg(1) != "build" {
+		fmt.Fprintf(os.Stderr, "Usage: %s --db <db> -- go build -o output [build flags] [packages]", os.Args[0])
+		flag.Usage()
+		os.Exit(2)
 	}
 
-	for i, arg := range os.Args[:len(os.Args)-1] {
-		switch arg {
+	config.dbPath = *db
+	config.args = flag.Args()
+
+	for i := range len(flag.Args()) - 1 {
+		switch flag.Arg(i) {
 		case "-o":
-			config.binaryName = os.Args[i+1]
+			config.binaryName = flag.Arg(i + 1)
 		case "-tags", "--tags":
-			config.buildTags = strings.Split(os.Args[i+1], ",")
+			config.buildTags = strings.Split(flag.Arg(i+1), ",")
 			slices.Sort(config.buildTags)
 		}
 	}
@@ -186,7 +193,7 @@ func areAllFilesInCache(ctx context.Context, filesContent map[string][]string) (
 }
 
 func writeToDB(ctx context.Context, config Config, linkCommands []string, filesContent map[string][]string) (err error) {
-	db, err := openOrCreateDB(ctx, dbPath)
+	db, err := openOrCreateDB(ctx, config.dbPath)
 	if err != nil {
 		return fmt.Errorf("unable to open or create database: %w", err)
 	}
