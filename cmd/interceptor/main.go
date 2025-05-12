@@ -30,8 +30,7 @@ func main() {
 
 	var linkCommands []string
 	var filesContent map[string][]string
-	allFilesInCache := false
-	for !allFilesInCache {
+	for allFilesInCache, remainingAttempts := false, 3; !allFilesInCache && remainingAttempts > 0; remainingAttempts-- {
 		// Force program rebuild
 		err = os.Remove(config.binaryName)
 		if err != nil && !os.IsNotExist(err) {
