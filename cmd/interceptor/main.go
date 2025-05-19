@@ -19,6 +19,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+var logInfof = log.Printf // nolint:unused
+var logDebugf = log.Printf
+
 func main() {
 	ctx := context.Background()
 
@@ -70,7 +73,8 @@ type Config struct {
 }
 
 func parseConfig(_ context.Context) (config Config, err error) {
-	db := flag.String("db", "link.db", "Path to the sqlite DB")
+	logLevel := flag.Uint("log-level", 0, "Log level (0 = silent, 1 = info, 2 = debug)")
+	flag.StringVar(&config.dbPath, "db", "link.db", "Path to the sqlite DB")
 	flag.Parse()
 	if len(flag.Args()) < 2 || flag.Arg(0) != "go" || flag.Arg(1) != "build" {
 		fmt.Fprintf(os.Stderr, "Usage: %s --db <db> -- go build -o output [build flags] [packages]", os.Args[0])
@@ -78,7 +82,6 @@ func parseConfig(_ context.Context) (config Config, err error) {
 		os.Exit(2)
 	}
 
-	config.dbPath = *db
 	config.args = flag.Args()
 
 	for i := range len(flag.Args()) - 1 {
@@ -92,6 +95,14 @@ func parseConfig(_ context.Context) (config Config, err error) {
 	}
 	if config.binaryName == "" {
 		return Config{}, errors.New("Error: -o flag is required")
+	}
+
+	switch {
+	case *logLevel < 1:
+		logInfof = func(string, ...any) {}
+		fallthrough
+	case *logLevel < 2:
+		logDebugf = func(string, ...any) {}
 	}
 
 	return
@@ -149,25 +160,25 @@ func parseGoBuildOutput(ctx context.Context, out []byte) (linkCommands []string,
 			if matches := envVarDefRe.FindStringSubmatch(line); matches != nil {
 				envVarMap[matches[1]] = matches[2]
 			}
-			log.Printf("Environment variable --- %s", line)
+			logDebugf("Environment variable --- %s", line)
 		case endFileRe.MatchString(line):
-			log.Printf("End of file %q     --- %s", currentFile, line)
+			logDebugf("End of file %q     --- %s", currentFile, line)
 			currentFile = ""
 		case currentFile != "":
-			log.Printf("Content of file %q --- %s", currentFile, line)
+			logDebugf("Content of file %q --- %s", currentFile, line)
 			filesContent[currentFile] = append(filesContent[currentFile], line)
 		case startFileRe.MatchString(line):
 			if matches := startFileRe.FindStringSubmatch(line); matches != nil {
 				currentFile = matches[1]
 			}
-			log.Printf("Start of file %q   --- %s", currentFile, line)
+			logDebugf("Start of file %q   --- %s", currentFile, line)
 		case linkCommandRe.MatchString(line):
 			if matches := linkCommandRe.FindStringSubmatch(line); matches != nil {
 				linkCommands = append(linkCommands, matches[1])
 			}
-			log.Printf("Link command found --- %s", line)
+			logDebugf("Link command found --- %s", line)
 		default:
-			log.Printf("Ignored line --- %s", line)
+			logDebugf("Ignored line --- %s", line)
 		}
 	}
 

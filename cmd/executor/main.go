@@ -17,6 +17,9 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+var logInfof = log.Printf
+var logDebugf = log.Printf
+
 func main() {
 	ctx := context.Background()
 
@@ -59,9 +62,9 @@ func main() {
 	}
 
 	// Invoke the linker
-	log.Printf("Link command: %s %s\n", config.linker, strings.Join(args, " "))
+	logInfof("Link command: %s %s", config.linker, strings.Join(args, " "))
 	out, err := exec.CommandContext(ctx, config.linker, args...).Output() //nolint:gosec
-	log.Print(string(out))
+	logInfof("%s", out)
 	if err != nil {
 		if err, ok := err.(*exec.ExitError); ok {
 			log.Print(string(err.Stderr))
@@ -74,7 +77,7 @@ func main() {
 		log.Fatalf("Error: unable to remove importcfg file: %v", err)
 	}
 
-	log.Printf("Exec: %s %s\n", binaryFile.Name(), config.args)
+	logInfof("Exec: %s %s", binaryFile.Name(), config.args)
 	if err := syscall.Exec(binaryFile.Name(), config.args, os.Environ()); err != nil { //nolint:gosec
 		log.Fatalf("Error: exec failed: %v", err)
 	}
@@ -89,8 +92,9 @@ type Config struct {
 }
 
 func parseConfig(_ context.Context) (config Config, err error) {
-	db := flag.String("db", "link.db", "Path to the sqlite DB")
-	link := flag.String("link", "", "File path to the linker executable (Should be \"$(go env GOTOOLDIR)/link\")")
+	logLevel := flag.Uint("log-level", 0, "Log level (0 = silent, 1 = info, 2 = debug)")
+	flag.StringVar(&config.dbPath, "db", "link.db", "Path to the sqlite DB")
+	flag.StringVar(&config.linker, "link", "", "File path to the linker executable (Should be \"$(go env GOTOOLDIR)/link\")")
 	tags := flag.String("tags", "", "Build tags to use")
 	flag.Parse()
 	if len(flag.Args()) < 1 {
@@ -99,13 +103,19 @@ func parseConfig(_ context.Context) (config Config, err error) {
 		os.Exit(2)
 	}
 
-	config.dbPath = *db
-	config.linker = *link
 	config.binaryName = flag.Arg(0)
 	config.args = flag.Args()[1:]
 	if *tags != "" {
 		config.buildTags = strings.Split(*tags, ",")
 		slices.Sort(config.buildTags)
+	}
+
+	switch {
+	case *logLevel < 1:
+		logInfof = func(string, ...any) {}
+		fallthrough
+	case *logLevel < 2:
+		logDebugf = func(string, ...any) {}
 	}
 
 	return
@@ -171,7 +181,7 @@ WHERE link_command_id = ?;`,
 		if err := rows.Scan(&line); err != nil {
 			return "", fmt.Errorf("unable to scan importcfg line: %w", err)
 		}
-		log.Printf("%s --- %s\n", importcfgFile.Name(), line)
+		logDebugf("%s --- %s", importcfgFile.Name(), line)
 		if _, err := fmt.Fprintln(importcfgFile, line); err != nil {
 			return "", fmt.Errorf("unable to write importcfg line: %w", err)
 		}
