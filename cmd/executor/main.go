@@ -83,7 +83,7 @@ func main() {
 	}
 
 	logInfof("Exec: %s %s", binaryFile.Name(), config.args)
-	if err := syscall.Exec(binaryFile.Name(), config.args, os.Environ()); err != nil { //nolint:gosec
+	if err := syscall.Exec(binaryFile.Name(), append([]string{config.binaryName}, config.args...), os.Environ()); err != nil { //nolint:gosec
 		log.Fatalf("Error: exec failed: %v", err)
 	}
 }
